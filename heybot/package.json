@@ -1,0 +1,6 @@
+{
+  "name": "@heybot/whatsapp-events",
+  "version": "0.1.0",
+  "private": true,
+  "exports": { ".": "./index.ts" }
+}

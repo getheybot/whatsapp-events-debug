@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["iad1"],
+  "functions": {
+    "app/api/queues/heybot-events/route.ts": {
+      "experimentalTriggers": [
+        { "type": "queue/v2beta", "topic": "heybot-message-events" }
+      ]
+    }
+  }
+}

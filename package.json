@@ -1,0 +1,33 @@
+{
+  "name": "whatsapp-heybot-debugger",
+  "license": "AGPL-3.0-or-later",
+  "version": "0.0.2",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "test:heybot": "node heybot/test.cjs && node heybot/storage/test.cjs",
+    "test:db": "node lib/db.test.cjs"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^6.19.0",
+    "@prisma/client": "^6.19.0",
+    "jose": "^6.1.0",
+    "next": "^15.5.0",
+    "pg": "^8.16.0",
+    "prisma": "^6.19.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@vercel/queue": "^0.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.9.0"
+  }
+}
