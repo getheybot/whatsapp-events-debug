@@ -1,49 +1,51 @@
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
-type CachedClient = { connectionString: string; client: PrismaClient };
-const globalDb = globalThis as unknown as {
-  heybotNativeReadDb?: CachedClient;
-  heybotNativeWriteDb?: CachedClient;
-};
+type CachedClient = { connectionString: string; poolMax: number; client: PrismaClient };
+const globalDb = globalThis as unknown as { heybotDatabase?: CachedClient };
 
-function getClient(variable: 'DATABASE_URL' | 'DIRECT_URL', cacheKey: 'heybotNativeReadDb' | 'heybotNativeWriteDb'): PrismaClient {
-  const connectionString = process.env[variable];
-  if (!connectionString) throw new Error(`${variable} must be configured for database connections`);
+function databaseConfig() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('DATABASE_URL must be configured for database connections');
   let url: URL;
   try {
     url = new URL(connectionString);
   } catch {
-    throw new Error(`${variable} must be a valid PostgreSQL connection URL`);
+    throw new Error('DATABASE_URL must be a valid PostgreSQL connection URL');
   }
   if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname) {
-    throw new Error(`${variable} must be a PostgreSQL connection URL with an explicit host`);
+    throw new Error('DATABASE_URL must be a PostgreSQL connection URL with an explicit host');
   }
+  const poolMax = Number(url.searchParams.get('connection_limit') ?? process.env.DATABASE_POOL_MAX ?? 2);
+  if (!Number.isInteger(poolMax) || poolMax < 1) throw new Error('Database connection limit must be a positive integer');
+  return { connectionString, url, poolMax };
+}
 
-  const poolMax = Number(process.env.DATABASE_POOL_MAX || 2);
-  if (!Number.isInteger(poolMax) || poolMax < 1) throw new Error('DATABASE_POOL_MAX must be a positive integer');
-  if (!url.searchParams.has('connection_limit')) url.searchParams.set('connection_limit', String(poolMax));
-  const datasourceUrl = url.toString();
+function getClient(): PrismaClient {
+  const { connectionString, url, poolMax } = databaseConfig();
+  const cached = globalDb.heybotDatabase;
+  if (cached?.connectionString === connectionString && cached.poolMax === poolMax) return cached.client;
 
-  const cached = globalDb[cacheKey];
-  if (cached?.connectionString === datasourceUrl) return cached.client;
-
-  // Prisma 6's native connector receives the URL explicitly for each client.
-  // directUrl in schema.prisma is for the CLI; it does not route runtime writes.
-  const client = new PrismaClient({ datasourceUrl });
-  if (process.env.NODE_ENV !== 'production') globalDb[cacheKey] = { connectionString: datasourceUrl, client };
+  // Prisma 7 requires a driver adapter. The same client handles reads and writes.
+  const adapter = new PrismaPg({ connectionString, max: poolMax, connectionTimeoutMillis: 10000 }, {
+    schema: url.searchParams.get('schema') || undefined,
+  });
+  const client = new PrismaClient({ adapter });
+  if (process.env.NODE_ENV !== 'production') globalDb.heybotDatabase = { connectionString, poolMax, client };
   return client;
 }
 
-// All reads inside a write transaction must stay on the write connection.
-export const prismaRead = getClient('DATABASE_URL', 'heybotNativeReadDb');
-export const prismaWrite = getClient('DIRECT_URL', 'heybotNativeWriteDb');
+export const prisma = getClient();
+// Preserve existing call sites while sharing one client and one connection pool.
+export const prismaRead = prisma;
+export const prismaWrite = prisma;
 
 /** Safe diagnostics: never include a full URL, database name, or credentials. */
 export function getWriteDatabaseTarget() {
-  const url = new URL(process.env.DIRECT_URL!);
+  const { url } = databaseConfig();
   return {
-    connectionSource: 'DIRECT_URL',
-    connector: 'prisma-native-v1',
+    connectionSource: 'DATABASE_URL',
+    connector: 'prisma-pg-single-url',
     host: url.hostname,
     port: url.port || '5432',
     deploymentId: process.env.VERCEL_DEPLOYMENT_ID || 'local',

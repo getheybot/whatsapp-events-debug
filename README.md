@@ -1,6 +1,6 @@
-# Event Log Debugger
+# Heybot - WhatsApp Event Debugger
 
-Next.js dashboard for WhatsApp events received through Heybot. Message and delivery events are sent through Vercel Queues and stored in `public.whatsapp_events`. The dashboard provides status filters, search, pagination, and syntax-highlighted original webhook payloads.
+Next.js dashboard for WhatsApp events received through Heybot. Message and delivery events are sent through Vercel Queues and stored in `public.whatsapp_events`. The dashboard provides status filters, search, pagination, and syntax-highlighted original webhook payloads. This application is deployed exclusively on Vercel and requires Vercel Queues.
 
 ## Requirements
 
@@ -25,7 +25,7 @@ Use these build settings:
 | Build command | `npm run build` |
 | Output directory | Leave the Next.js default |
 
-`npm run build` runs `prisma generate` before `next build`. Database migrations are applied separately in step 3.
+`npm run build` runs `prisma generate`, `prisma migrate deploy`, and then `next build`. The build needs database access and migration permissions; step 3 explains database preparation and baselining.
 
 ### 2. Configure environment variables
 
@@ -33,38 +33,34 @@ In your Vercel project's **Settings → Environment Variables**, add the followi
 
 | Variable | Value |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL read URL used by the dashboard. |
-| `DIRECT_URL` | PostgreSQL write URL used by the queue consumer and Prisma migrations. |
+| `DATABASE_URL` | PostgreSQL URL shared by dashboard reads, queue writes, and Prisma migrations. Credentials must allow writes and migrations. |
 | `HEYBOT_VERIFY_TOKEN` | A secret shared with Heybot to authenticate incoming webhooks. |
 | `EMAILS_ALLOWED` | Comma-separated emails allowed to sign in, such as `me@example.com,team@example.com`. |
 | `SESSION_SECRET` | A random session secret; generate one with `openssl rand -hex 32`. |
-| `DATABASE_POOL_MAX` | Optional pool size per Prisma client; defaults to `2`. A URL's `connection_limit` takes precedence. |
+| `DATABASE_POOL_MAX` | Optional shared client pool size; defaults to `2`. A URL's `connection_limit` takes precedence. |
 
-Use database hosts reachable from Vercel. `localhost` and `127.0.0.1` refer to the function itself, not your database. Do not paste surrounding quotes into Vercel's environment-variable values. Never commit credentials or `.env` files.
+Use a hosted PostgreSQL database reachable from Vercel. Do not paste surrounding quotes into Vercel's environment-variable values. Never commit credentials or `.env` files.
 
-For Supabase on an IPv4-only connection, copy the **shared transaction pooler** URL for `DATABASE_URL` and the **shared session pooler** URL for `DIRECT_URL` from your project's **Connect** dialog:
+One `DATABASE_URL` is used for all operations. Choose a session-capable PostgreSQL endpoint that supports both transactions and migrations. The schema and migrations support PostgreSQL, including PostgreSQL databases hosted on Supabase, Neon, and PlanetScale Postgres. PlanetScale MySQL/Vitess is a different database dialect and is not supported by this PostgreSQL schema.
+
+For Supabase on an IPv4-only connection, copy the **shared session pooler** URL from your project's **Connect** dialog:
 
 ```dotenv
-DATABASE_URL="postgresql://postgres.PROJECT_REF:ENCODED_PASSWORD@POOLER_HOST:6543/postgres?pgbouncer=true&sslmode=require"
-DIRECT_URL="postgresql://postgres.PROJECT_REF:ENCODED_PASSWORD@POOLER_HOST:5432/postgres?sslmode=require"
+DATABASE_URL="postgresql://postgres.PROJECT_REF:ENCODED_PASSWORD@POOLER_HOST:5432/postgres?sslmode=require"
 ```
 
-Replace all placeholders with the copied connection details and percent-encode reserved characters in the password. Use the shared pooler host from the Connect dialog; do not substitute a `db.PROJECT_REF.supabase.co` host. See [Supabase connection methods](https://supabase.com/docs/guides/database/connecting-to-postgres).
+Replace all placeholders with the copied connection details and percent-encode reserved characters in the password. Use the shared pooler host from the Connect dialog; do not substitute a `db.PROJECT_REF.supabase.co` host. A transaction-only pooler is not a universal replacement for a session-capable migration connection. See [Supabase connection methods](https://supabase.com/docs/guides/database/connecting-to-postgres).
+
+For Neon or PlanetScale Postgres, copy a PostgreSQL connection URL from the provider's console that supports migrations and writes, retaining its SSL parameters. Provider selection does not require a separate environment variable. See [PlanetScale Postgres connections](https://planetscale.com/docs/postgres/connecting).
 
 Environment changes apply only to new deployments. Redeploy after changing a value, and check the environment and any branch-specific overrides for the deployment you are testing. See [Vercel environment variables](https://vercel.com/docs/environment-variables).
 
 ### 3. Prepare the database
 
-Create the PostgreSQL database before applying migrations. From a trusted machine or CI job with the intended database URLs configured, install dependencies and apply the committed migration:
+Create the hosted PostgreSQL database and configure `DATABASE_URL` in Vercel before deploying. The Vercel build runs `prisma migrate deploy` automatically to apply committed migrations.
+The migration at `prisma/migrations/20261017000100_whatsapp_events/migration.sql` creates `public.whatsapp_events` and its indexes. Migrations use `DATABASE_URL`; confirm it targets the intended database before running the command.
 
-```bash
-npm ci
-npx prisma migrate deploy
-```
-
-The migration at `prisma/migrations/20261017000100_whatsapp_events/migration.sql` creates `public.whatsapp_events` and its indexes. Migrations use `DIRECT_URL`; confirm it targets the intended database before running the command.
-
-If the table already exists, first verify that its columns, indexes, and ID default match `prisma/schema.prisma` and the migration. Only when they match, baseline the migration instead of attempting to create the table again:
+If the table already exists, first verify that its columns, indexes, and ID default match `prisma/schema.prisma` and the migration. Only when they match, baseline the migration in a one-time CI job configured with the intended `DATABASE_URL` before deploying:
 
 ```bash
 npx prisma migrate resolve --applied 20261017000100_whatsapp_events
@@ -92,20 +88,31 @@ Keep the committed `vercel.json`. It sets the application region to `iad1` and r
 
 The receiver awaits queue publication before returning success. Vercel invokes the consumer to persist records and retries when it throws. The queue SDK authenticates automatically on Vercel. If you change regions, keep the producer and consumer in the same region. See [Vercel Queues setup](https://vercel.com/docs/queues/quickstart).
 
-### 5. Configure webhooks in Heybot
+### 5. Copy the verification token from Vercel and configure Heybot
 
-1. Visit [heybot.cloud](https://heybot.cloud), sign in, and open the **Webhook** section.
-2. Set the destination URL for webhook events to your deployed application's public receiver:
+1. Open your project in the [Vercel dashboard](https://vercel.com/dashboard) and go to **Settings → Environment Variables**.
+2. Find `HEYBOT_VERIFY_TOKEN` for **Production** and copy its configured value when it is readable. This is the shared token you configured, not a Vercel API token. If the variable is missing, create it with a random value, for example generated with `openssl rand -hex 32`. If it was saved as a write-only secret and you no longer have its value, replace it with a new known value. Redeploy whenever you create or change the variable so Production uses that value. See [Vercel environment variables](https://vercel.com/docs/environment-variables).
+3. Sign in to Heybot and visit the webhook settings for your account:
 
    ```text
-   https://YOUR_DOMAIN/webhook/heybot
+   https://heybot.cloud/phone/{account}/webhook
    ```
 
-3. Configure Heybot to send the `x-heybot-signature` header with the same value as your deployed `HEYBOT_VERIFY_TOKEN`.
-4. Enable the WhatsApp events you want Heybot to forward and save the configuration.
-5. Send a WhatsApp message or trigger a delivery event to verify the integration.
+   Replace `{account}` with your Heybot account identifier.
 
-Use your production domain, for example `https://your-project.vercel.app/webhook/heybot`. Heybot sends events to `/webhook/heybot`; the `/api/queues/heybot-events` consumer is private and invoked by Vercel. Ensure the public receiver is accessible to Heybot without an interactive deployment-protection login.
+4. Set the webhook URL to your **Vercel production URL** followed by `/webhook/heybot`:
+
+   ```text
+   https://YOUR-PROJECT.vercel.app/webhook/heybot
+   ```
+
+   If you use a custom production domain, use `https://YOUR_DOMAIN/webhook/heybot` instead.
+
+5. Paste the exact `HEYBOT_VERIFY_TOKEN` value from Vercel into **Firma de seguridad**, without surrounding quotes or extra spaces.
+6. Enable the WhatsApp events you want Heybot to forward and **save** the configuration.
+7. Send a WhatsApp message or trigger a delivery event to verify the integration.
+
+The **Firma de seguridad** value must match the token used by the production deployment; the receiver compares it against the incoming `x-heybot-signature` header. Heybot sends events to `/webhook/heybot`; the `/api/queues/heybot-events` consumer is private and invoked by Vercel. Ensure the public receiver is accessible to Heybot without an interactive deployment-protection login.
 
 The package recognizes messages, delivery events, template status, template quality, and marketing preferences. Currently, messages and delivery events are persisted; the other categories are available for custom handlers.
 
@@ -120,48 +127,19 @@ Inspect Vercel runtime logs for both the webhook receiver and the queue consumer
 | `503 Server configuration error` | `HEYBOT_VERIFY_TOKEN` is missing from that deployment. |
 | `401 Invalid signature` | Heybot's `x-heybot-signature` must exactly match `HEYBOT_VERIFY_TOKEN`. |
 | `400 Invalid JSON` or `Invalid webhook payload` | Inspect the payload sent by Heybot. |
-| Database connection error | Check `DATABASE_URL` for dashboard reads and `DIRECT_URL` for queue writes. Confirm the hostname, port, environment scope, and new deployment. |
+| Database connection error | Check `DATABASE_URL`, which is shared by reads, queue writes, and migrations. Confirm the hostname, port, environment scope, and new deployment. |
 | `[heybot:queue-database]` log | Shows the selected write hostname, port, and deployment ID without credentials. |
 
 For storage mappings and retry behavior, see [Heybot storage](heybot/storage/README.md).
 
-## Local development
-
-Install dependencies and create a local environment file:
-
-```bash
-npm ci
-cp .env.example .env
-```
-
-Set the variables described above in `.env`. Both URLs may point to the same local PostgreSQL database when running locally. Apply migrations, then start Next.js:
-
-```bash
-npx prisma migrate deploy
-npm run dev
-```
-
-Open [localhost:3000/login](http://localhost:3000/login).
-
-To test queue delivery locally, link the Vercel project and pull development credentials before starting the application. Keep the downloaded environment file private:
-
-```bash
-npx vercel link
-npx vercel env pull
-npx vercel dev
-```
-
-`next dev` is also supported by the queue SDK when the required local credentials are available. See the [Vercel Queues quickstart](https://vercel.com/docs/queues/quickstart).
-
-## Validation
+## CI validation
 
 ```bash
 npm run test:heybot
 npm run test:db
-npm run build
 ```
 
-The storage tests mock queue publication and database writes. They do not confirm connectivity to a deployed database.
+The storage tests mock queue publication and database writes. They do not confirm connectivity to a deployed database. Vercel runs `npm run build` during deployment; verify the deployed integration using step 6 above.
 
 ## Searching events
 

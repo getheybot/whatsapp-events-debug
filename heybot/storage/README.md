@@ -8,8 +8,9 @@ but are not stored in the message-event table.
 
 `app/api/queues/heybot-events/route.ts` is the private push consumer configured in
 `vercel.json`. It inserts into the existing `whatsapp_events` table using
-the `prismaWrite` client connected to `DIRECT_URL`. Dashboard reads use
-`prismaRead` connected to `DATABASE_URL`. Dates are ISO strings in queue payloads and become `Date` objects on insert;
+one shared Prisma client connected to `DATABASE_URL`. The `prismaRead` and
+`prismaWrite` exports both reference this client, as do database operations made
+through the `prisma` export. Prisma migrations also use `DATABASE_URL`. Dates are ISO strings in queue payloads and become `Date` objects on insert;
 status codes become `BigInt`. Database errors propagate to trigger queue retries.
 
 ## Mapping
@@ -41,12 +42,12 @@ separate rows. Other database writers must use the same protocol for this guaran
 
 ## Setup
 
-1. Run `npm install` to install `@vercel/queue` and refresh `package-lock.json`.
-2. Use Node.js 22+ (per Vercel's queue quickstart).
-3. Configure `HEYBOT_VERIFY_TOKEN` and the existing database environment variables.
-4. Deploy with the committed `vercel.json`; producer and consumer use `iad1`.
-5. For local development, link the Vercel project and run `vercel env pull` to obtain
-   OIDC credentials, then use `vercel dev` or `next dev`.
+This application's queue integration runs on Vercel.
+
+1. Import the repository into Vercel as a Next.js project with Node.js 22+.
+2. Set `HEYBOT_VERIFY_TOKEN`, `DATABASE_URL`, and the other required environment variables in Vercel.
+3. Deploy with the committed `vercel.json`; producer and consumer use `iad1`.
+4. Follow the [deployment and Heybot webhook instructions](../../README.md#deploy-on-vercel) to configure the production receiver.
 
 A webhook HTTP 200 acknowledges queue acceptance, not completion of persistence.
 Queue failures propagate as server errors so the sender can retry. Malformed

@@ -101,7 +101,7 @@ function loader(mocks = {}) {
       send: async (...args) => { if (rejectSend) throw new Error('queue unavailable'); sends.push(args); if (releaseSend) await releaseSend; return { messageId: 'test' }; },
       handleCallback: callback => request => callback(request),
     },
-    [path.join(root, 'lib/db')]: { prismaWrite: mockDb, getWriteDatabaseTarget: () => ({ connectionSource: 'DIRECT_URL', connector: 'prisma-native-v1', host: 'write.example', port: '5432', deploymentId: 'test' }), prismaRead: new Proxy({}, { get() { throw new Error('Consumer must not use the read connection'); } }) },
+    [path.join(root, 'lib/db')]: { prismaWrite: mockDb, getWriteDatabaseTarget: () => ({ connectionSource: 'DATABASE_URL', connector: 'prisma-pg-single-url', host: 'write.example', port: '5432', deploymentId: 'test' }), prismaRead: new Proxy({}, { get() { throw new Error('Consumer must not use the read connection'); } }) },
   });
   const { enqueueMessageEvents, MESSAGE_EVENTS_TOPIC } = mockedLoad('heybot/storage/queue.ts');
   await enqueueMessageEvents([record, failed]);
