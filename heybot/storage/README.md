@@ -8,10 +8,10 @@ but are not stored in the message-event table.
 
 `app/api/queues/heybot-events/route.ts` is the private push consumer configured in
 `vercel.json`. It inserts into the existing `whatsapp_events` table using
-one shared Prisma client connected to `DATABASE_URL`. The `prismaRead` and
-`prismaWrite` exports both reference this client, as do database operations made
-through the `prisma` export. Prisma migrations also use `DATABASE_URL`. Dates are ISO strings in queue payloads and become `Date` objects on insert;
-status codes become `BigInt`. Database errors propagate to trigger queue retries.
+one shared Drizzle database instance connected to `DATABASE_URL`. Dashboard reads,
+queue writes, and the migration runner use the same connection URL. Dates are ISO
+strings in queue payloads and become `Date` objects on insert; codes become
+`BigInt`. Database errors propagate to trigger queue retries.
 
 ## Mapping
 
@@ -27,7 +27,7 @@ status codes become `BigInt`. Database errors propagate to trigger queue retries
 - `event_at` uses the individual event's Unix timestamp in seconds, converted to UTC.
 - `created_at` and `updated_at` use the consumer's insert time.
 
-Persistence uses Prisma's `whatsappEvent` model mapped to `whatsapp_events`.
+Persistence uses the `whatsappEvents` Drizzle table defined in `lib/schema.ts`, mapped to `whatsapp_events`.
 The queue's existing `statusCode` field maps to the SQL `code` column for
 compatibility with pending messages. The removed `billable` column is not written;
 any original billing information remains in `content`.
@@ -55,7 +55,7 @@ webhooks or records return 400 before sending. A batch containing only the other
 supported event categories is acknowledged without queuing message records.
 
 Run tests with `npm run test:heybot`. Storage integration tests mock Vercel Queues
-and Prisma; they do not publish messages or write to a live database.
+and PostgreSQL transport; they exercise real Drizzle SQL generation without publishing messages or writing to a live database.
 
 References:
 - https://vercel.com/docs/queues/quickstart

@@ -1,26 +1,27 @@
-import { prismaWrite } from '../../lib/db';
+import { and, eq, sql } from 'drizzle-orm';
+import { db } from '../../lib/db';
+import { whatsappEvents } from '../../lib/schema';
 import { MessageEventRecord } from './records';
 import { recordKey } from './identity';
 
 export async function persistMessageEvent(record: MessageEventRecord): Promise<void> {
   const eventAt = new Date(record.eventAt);
   const code = BigInt(record.statusCode);
-  await prismaWrite.$transaction(async transaction => {
-    // Serialize duplicate deliveries across consumer instances without a schema change.
+  await db.transaction(async transaction => {
     const key = recordKey(record);
-    await transaction.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${key})::bigint)`;
-    const existing = await transaction.whatsappEvent.findFirst({
-      where: { wamid: record.wamid, eventName: record.eventName, eventAt, code },
-      select: { id: true },
-    });
+    await transaction.execute(sql`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${key})::bigint)`);
+    const [existing] = await transaction.select({ id: whatsappEvents.id }).from(whatsappEvents).where(and(
+      eq(whatsappEvents.wamid, record.wamid),
+      eq(whatsappEvents.eventName, record.eventName),
+      eq(whatsappEvents.eventAt, eventAt),
+      eq(whatsappEvents.code, code),
+    )).limit(1);
     if (existing) return;
     const now = new Date();
-    await transaction.whatsappEvent.create({
-      data: {
-        wamid: record.wamid, eventName: record.eventName, code,
-        category: record.category, content: record.content, eventAt,
-        createdAt: now, updatedAt: now,
-      },
+    await transaction.insert(whatsappEvents).values({
+      wamid: record.wamid, eventName: record.eventName, code,
+      category: record.category, content: record.content, eventAt,
+      createdAt: now, updatedAt: now,
     });
   });
 }

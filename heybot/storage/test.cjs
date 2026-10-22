@@ -19,6 +19,7 @@ function loader(mocks = {}) {
     }).outputText;
     new Function('require', 'exports', code)(name => {
       if (name in mocks || name.startsWith('node:')) return load(name);
+      if (!name.startsWith('.') && !name.startsWith('@/')) return require(name);
       return load(name.startsWith('@/') ? path.join(root, name.slice(2)) : path.resolve(path.dirname(file), name));
     }, exports);
     return exports;
@@ -85,23 +86,38 @@ function loader(mocks = {}) {
   const sends = [];
   let rejectSend = false;
   let releaseSend;
-  const mockDb = { $transaction: async callback => callback(transaction) };
   const inserted = [];
   let lockCount = 0;
   let dbFailure = false;
-  const transaction = {
-    $queryRaw: async () => { lockCount++; },
-    whatsappEvent: {
-      findFirst: async ({ where }) => inserted.find(row => row.wamid === where.wamid && row.eventName === where.eventName && +row.eventAt === +where.eventAt && row.code === where.code),
-      create: async ({ data }) => { if (dbFailure) throw new Error('DB unavailable'); inserted.push(data); },
+  let rollbackCount = 0;
+  // Real Drizzle generates and maps the SQL; only the pg transport is mocked.
+  const fakeClient = {
+    query: async (query, parameters) => {
+      const text = typeof query === 'string' ? query : query.text;
+      if (text.startsWith('begin') || text.startsWith('commit')) return { rows: [] };
+      if (text.startsWith('rollback')) { rollbackCount++; return { rows: [] }; }
+      if (text.includes('pg_advisory_xact_lock')) { lockCount++; return { rows: [] }; }
+      if (text.startsWith('select')) {
+        const [wamid, eventName, eventAt, code] = parameters;
+        const found = inserted.find(row => row.wamid === wamid && row.eventName === eventName && +row.eventAt === +new Date(eventAt) && row.code === BigInt(code));
+        return { rows: found ? [[String(found.id)]] : [] };
+      }
+      if (text.startsWith('insert')) {
+        if (dbFailure) throw new Error('DB unavailable');
+        const [wamid, eventName, code, category, content, eventAt, createdAt, updatedAt] = parameters;
+        inserted.push({ id: inserted.length + 1, wamid, eventName, code: BigInt(code), category, content: JSON.parse(content), eventAt: new Date(eventAt), createdAt: new Date(createdAt), updatedAt: new Date(updatedAt) });
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected SQL: ${text}`);
     },
   };
+  const mockDb = require('drizzle-orm/node-postgres').drizzle(fakeClient);
   const mockedLoad = loader({
     '@vercel/queue': {
       send: async (...args) => { if (rejectSend) throw new Error('queue unavailable'); sends.push(args); if (releaseSend) await releaseSend; return { messageId: 'test' }; },
       handleCallback: callback => request => callback(request),
     },
-    [path.join(root, 'lib/db')]: { prismaWrite: mockDb, getWriteDatabaseTarget: () => ({ connectionSource: 'DATABASE_URL', connector: 'prisma-pg-single-url', host: 'write.example', port: '5432', deploymentId: 'test' }), prismaRead: new Proxy({}, { get() { throw new Error('Consumer must not use the read connection'); } }) },
+    [path.join(root, 'lib/db')]: { db: mockDb, getWriteDatabaseTarget: () => ({ connectionSource: 'DATABASE_URL', connector: 'drizzle-node-postgres', host: 'write.example', port: '5432', deploymentId: 'test' }) },
   });
   const { enqueueMessageEvents, MESSAGE_EVENTS_TOPIC } = mockedLoad('heybot/storage/queue.ts');
   await enqueueMessageEvents([record, failed]);
@@ -126,7 +142,8 @@ function loader(mocks = {}) {
   assert.equal('statusCode' in inserted[0], false);
   assert.equal('billable' in inserted[0], false);
   dbFailure = true;
-  await assert.rejects(() => persistMessageEvent({ ...record, wamid: 'new' }), /DB unavailable/);
+  await assert.rejects(() => persistMessageEvent({ ...record, wamid: 'new' }), error => error.cause?.message === 'DB unavailable');
+  assert.equal(rollbackCount, 1);
   dbFailure = false;
 
   const route = mockedLoad('app/webhook/heybot/route.ts');

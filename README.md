@@ -13,7 +13,7 @@ Next.js dashboard for WhatsApp events received through Heybot. Message and deliv
 
 ### 1. Import the project
 
-Push the project to your Git provider, including `package-lock.json`, `vercel.json`, and the Prisma migration files. In Vercel, create a project and import the repository. Select the directory containing `package.json` as the root directory.
+Push the project to your Git provider, including `package-lock.json`, `vercel.json`, and the Drizzle migration files. In Vercel, create a project and import the repository. Select the directory containing `package.json` as the root directory.
 
 Use these build settings:
 
@@ -25,7 +25,7 @@ Use these build settings:
 | Build command | `npm run build` |
 | Output directory | Leave the Next.js default |
 
-`npm run build` runs `prisma generate`, `prisma migrate deploy`, and then `next build`. The build needs database access and migration permissions; step 3 explains database preparation and baselining.
+`npm run build` runs `npm run db:migrate` and then `next build`. Drizzle uses the existing `pg` driver and does not require client generation. The build needs database access and migration permissions; step 3 explains database preparation and baselining.
 
 ### 2. Configure environment variables
 
@@ -33,11 +33,11 @@ In your Vercel project's **Settings → Environment Variables**, add the followi
 
 | Variable | Value |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL URL shared by dashboard reads, queue writes, and Prisma migrations. Credentials must allow writes and migrations. |
+| `DATABASE_URL` | PostgreSQL URL shared by dashboard reads, queue writes, and Drizzle migrations. Credentials must allow writes and migrations. |
 | `HEYBOT_VERIFY_TOKEN` | A secret shared with Heybot to authenticate incoming webhooks. |
 | `EMAILS_ALLOWED` | Comma-separated emails allowed to sign in, such as `me@example.com,team@example.com`. |
 | `SESSION_SECRET` | A random session secret; generate one with `openssl rand -hex 32`. |
-| `DATABASE_POOL_MAX` | Optional shared client pool size; defaults to `2`. A URL's `connection_limit` takes precedence. |
+| `DATABASE_POOL_MAX` | Optional PostgreSQL pool size; defaults to `2`. A URL's `connection_limit` takes precedence. |
 
 Use a hosted PostgreSQL database reachable from Vercel. Do not paste surrounding quotes into Vercel's environment-variable values. Never commit credentials or `.env` files.
 
@@ -57,17 +57,13 @@ Environment changes apply only to new deployments. Redeploy after changing a val
 
 ### 3. Prepare the database
 
-Create the hosted PostgreSQL database and configure `DATABASE_URL` in Vercel before deploying. The Vercel build runs `prisma migrate deploy` automatically to apply committed migrations.
-The migration at `prisma/migrations/20261017000100_whatsapp_events/migration.sql` creates `public.whatsapp_events` and its indexes. Migrations use `DATABASE_URL`; confirm it targets the intended database before running the command.
+Create the hosted PostgreSQL database and configure `DATABASE_URL` in Vercel before deploying. The Vercel build runs `npm run db:migrate` automatically to apply the SQL migrations in `drizzle/`.
 
-If the table already exists, first verify that its columns, indexes, and ID default match `prisma/schema.prisma` and the migration. Only when they match, baseline the migration in a one-time CI job configured with the intended `DATABASE_URL` before deploying:
+The initial migration, `drizzle/0000_whatsapp_events.sql`, creates `public.whatsapp_events` and its indexes when they do not exist. If the table already exists, the migration runner validates its columns, primary key, and ID default before adopting it. Compatible existing tables and event records are preserved; a mismatched table causes the build to fail rather than being replaced.
 
-```bash
-npx prisma migrate resolve --applied 20261017000100_whatsapp_events
-npx prisma migrate deploy
-```
+Drizzle tracks applied migrations in `drizzle.__drizzle_migrations`. Previous migration-history tables remain untouched and are no longer used by this application. Migrations are serialized across simultaneous builds using a PostgreSQL advisory lock, so `DATABASE_URL` must support a persistent session during migration.
 
-Baselining records the migration as applied without changing the table. Reconcile any schema differences before baselining. Run migrations once as a deployment step, not on every function invocation.
+For schema changes, update `lib/schema.ts`, run `npm run db:generate` in a maintenance or CI environment, review the generated SQL, and commit the migration, snapshot, and journal files. Vercel applies pending migrations on the next deployment. Do not edit migrations that have already been applied.
 
 ### 4. Deploy the application and queue consumer
 
@@ -137,9 +133,10 @@ For storage mappings and retry behavior, see [Heybot storage](heybot/storage/REA
 ```bash
 npm run test:heybot
 npm run test:db
+npm run test:migrations
 ```
 
-The storage tests mock queue publication and database writes. They do not confirm connectivity to a deployed database. Vercel runs `npm run build` during deployment; verify the deployed integration using step 6 above.
+The tests exercise real Drizzle queries and migration logic with mocked PostgreSQL and queue transports. They do not confirm connectivity to a deployed database. Vercel runs `npm run build` during deployment; verify the deployed integration using step 6 above.
 
 ## Searching events
 
@@ -154,6 +151,7 @@ Email-only login checks an allowlist; it does not verify ownership of the suppli
 - [Deploying to Vercel](https://vercel.com/docs/deployments)
 - [Vercel environment variables](https://vercel.com/docs/environment-variables)
 - [Vercel Queues quickstart](https://vercel.com/docs/queues/quickstart)
+- [Drizzle PostgreSQL integration](https://orm.drizzle.team/docs/get-started-postgresql)
 - [Supabase connection methods](https://supabase.com/docs/guides/database/connecting-to-postgres)
 
 ## License
