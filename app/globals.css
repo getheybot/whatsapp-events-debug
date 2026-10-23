@@ -3,3 +3,5 @@
 .raw .json-key{color:#93c5fd}.raw .json-string{color:#86efac}.raw .json-number{color:#fdba74}.raw .json-boolean{color:#c4b5fd}.raw .json-null{color:#fda4af}
 
 .sidebarBrand{display:block;padding:20px 15px 4px;font-size:23px;font-weight:700;letter-spacing:-.6px;color:#37537b}.sidebarBrand:focus-visible{outline:2px solid #37537b;outline-offset:-4px}
+
+.backToHeybot{display:block;margin-top:20px;text-align:center;font-size:14px;color:#37537b}.backToHeybot:hover,.backToHeybot:focus-visible{text-decoration:underline}
